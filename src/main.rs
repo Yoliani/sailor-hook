@@ -38,6 +38,7 @@ async fn main() -> anyhow::Result<()> {
         Command::Serve { port } => commands::serve::run(port).await,
         Command::Status { json } => commands::status::run(json),
         Command::Context => commands::context::run(),
+        Command::CwdList => commands::cwd_list::run(),
         Command::Diff { dir } => commands::diff::run(dir).await,
         Command::Logs { follow } => commands::logs::run(follow),
         Command::Usage { sync } => commands::usage::run(sync),

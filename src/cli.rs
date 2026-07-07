@@ -45,6 +45,8 @@ pub enum Command {
     },
     /// One-shot terminal-context probe (tmux / Zellij / Herdr detection).
     Context,
+    /// Recent project directories from agent transcript history, as JSON.
+    CwdList,
     /// Standalone diff viewer server for a repo, opened in a local browser.
     Diff {
         /// Repository directory (default: cwd).

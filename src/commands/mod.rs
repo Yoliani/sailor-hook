@@ -2,6 +2,7 @@
 //! intent. `context` and `version` are fully implemented; `status` is partial.
 
 pub mod context;
+pub mod cwd_list;
 pub mod diff;
 pub mod install;
 pub mod logs;
