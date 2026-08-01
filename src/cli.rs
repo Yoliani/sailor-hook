@@ -37,6 +37,15 @@ pub enum Command {
         #[arg(long, default_value = "24543")]
         port: u16,
     },
+    /// Advertise this host as a `_sailor._tcp` Bonjour service on the LAN
+    /// so the sailor app can auto-discover it. The TXT record carries the
+    /// Tailscale MagicDNS name (when Tailscale is running) so a host found
+    /// once on WiFi keeps connecting over the tailnet, including on cellular.
+    Advertise {
+        /// SSH port the phone should connect to (mosh bootstraps over SSH).
+        #[arg(long, default_value = "22")]
+        ssh_port: u16,
+    },
     /// Print daemon + hook status.
     Status {
         /// Emit machine-readable JSON.

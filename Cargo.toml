@@ -33,6 +33,8 @@ thiserror = "1"
 keyring = "3"
 # Misc
 dirs = "5"
+# LAN discovery (mDNS advertiser for `sailor-hook advertise`)
+mdns-sd = "0.13"
 uuid = { version = "1", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 

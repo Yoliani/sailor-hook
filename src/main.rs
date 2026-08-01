@@ -13,6 +13,7 @@ mod cli;
 mod commands;
 mod config;
 mod context;
+mod discovery;
 mod events;
 mod gateway;
 mod secret;
@@ -36,6 +37,7 @@ async fn main() -> anyhow::Result<()> {
         Command::Install { agent } => commands::install::run(agent).await,
         Command::Uninstall { agent } => commands::uninstall::run(agent).await,
         Command::Serve { port } => commands::serve::run(port).await,
+        Command::Advertise { ssh_port } => discovery::advertise(ssh_port).await,
         Command::Status { json } => commands::status::run(json),
         Command::Context => commands::context::run(),
         Command::CwdList => commands::cwd_list::run(),
