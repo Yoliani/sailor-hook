@@ -1,12 +1,17 @@
-//! Subcommand implementations. Phase 0: most are stubs that compile and report
-//! intent. `context` and `version` are fully implemented; `status` is partial.
+//! Subcommand implementations. `diff` and `usage` are still Phase 4/5 stubs;
+//! the rest are implemented.
 
+pub mod approve;
 pub mod context;
 pub mod cwd_list;
 pub mod diff;
+pub mod easy_pair;
+pub mod event;
+pub mod inbox;
 pub mod install;
 pub mod logs;
 pub mod pair;
+pub mod push;
 pub mod serve;
 pub mod status;
 pub mod uninstall;

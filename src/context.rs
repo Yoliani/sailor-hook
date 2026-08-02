@@ -5,9 +5,11 @@
 //! current shell and reports the detected kind + session/pane/workspace/cwd.
 //! See `TECH.md` §2.3 for the multiplexer support matrix.
 
+use serde::{Deserialize, Serialize};
 use std::env;
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Context {
     pub kind: Kind,
     pub session: Option<String>,
@@ -16,7 +18,8 @@ pub struct Context {
     pub cwd: Option<String>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Kind {
     #[default]
     None,
@@ -33,6 +36,20 @@ impl Kind {
             Kind::Zellij => "zellij",
             Kind::Herdr => "herdr",
         }
+    }
+}
+
+impl Context {
+    /// The `{kind, session, pane, workspace, cwd}` shape both the CLI and the
+    /// gateway's `/context` return.
+    pub fn to_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "kind": self.kind.as_str(),
+            "session": self.session,
+            "pane": self.pane,
+            "workspace": self.workspace,
+            "cwd": self.cwd,
+        })
     }
 }
 

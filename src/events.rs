@@ -1,11 +1,13 @@
 //! Agent event schema — the normalized 5-category contract between agents
 //! and the sailor app. See `TECH.md` §4.
 //!
-//! Phase 0: just the types. Phase 3 wires ingestion (Unix socket) and the
-//! per-agent adapters that normalize each agent's hook output into this.
+//! Phase 3 wires this up: `adapters/` produce these, `ipc` carries them, and
+//! `inbox` folds them into rows.
 
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
+
+use crate::context::Context;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -43,6 +45,12 @@ pub struct Event {
     #[serde(default)]
     pub usage: Vec<UsageWindow>,
     pub context_remaining: Option<f32>,
+    /// Which multiplexer pane the agent is running in, when it is running in
+    /// one — the hook process inherits the pane's environment, so this is
+    /// read at the source. It is what lets tapping a row reattach the right
+    /// tmux/Zellij/Herdr session.
+    #[serde(default)]
+    pub terminal: Option<Context>,
 }
 
 impl Event {
@@ -60,6 +68,7 @@ impl Event {
             expires_at: None,
             usage: Vec::new(),
             context_remaining: None,
+            terminal: None,
         }
     }
 }

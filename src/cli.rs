@@ -20,6 +20,49 @@ pub enum Command {
         #[arg(long, default_value = "keychain")]
         store: String,
     },
+    /// Start mosh-server and print a QR code the sailor app scans to
+    /// connect directly — no SSH credentials on the phone.
+    EasyPair {
+        /// Host address to encode in the QR (default: this machine's
+        /// primary IPv4). Use a Tailscale MagicDNS name to roam networks.
+        #[arg(long)]
+        host: Option<String>,
+        /// Terminal color count mosh-server advertises (8 or 256).
+        #[arg(long, default_value = "256")]
+        colors: u16,
+    },
+    /// Normalize one agent hook payload (read from stdin) and post it to the
+    /// running daemon. This is what `install` wires into each agent's config;
+    /// it is not meant to be run by hand.
+    Event {
+        /// Agent whose payload format to expect (currently `claude_code`).
+        #[arg(long)]
+        agent: String,
+        /// How long to park a decidable approval waiting for the phone
+        /// before falling back to the agent's own terminal prompt. Keep it
+        /// below the hook's configured `timeout` so this process always gets
+        /// to answer rather than being killed mid-write.
+        #[arg(long, default_value = "240")]
+        wait_secs: u64,
+    },
+    /// Answer an approval the agent is parked on. Run by the app over its
+    /// SSH exec channel. Exits non-zero if nothing was waiting on that id.
+    Approve {
+        /// The row's `pendingActionId`.
+        pending_action_id: String,
+        /// Approve the tool call.
+        #[arg(long, conflicts_with = "deny")]
+        allow: bool,
+        /// Refuse the tool call.
+        #[arg(long)]
+        deny: bool,
+    },
+    /// Print the inbox as NDJSON, one row per line.
+    Inbox {
+        /// Keep the connection open and stream updates as they arrive.
+        #[arg(long)]
+        watch: bool,
+    },
     /// Write sailor-owned hook entries into supported agent config files.
     Install {
         /// Limit to one agent (claude_code, codex, opencode, gemini, cursor, kimi, qwen).
@@ -36,6 +79,12 @@ pub enum Command {
         /// Gateway port (default 24543, matching moshi-hook for familiarity).
         #[arg(long, default_value = "24543")]
         port: u16,
+        /// SSH port to advertise for LAN auto-discovery (mosh bootstraps over SSH).
+        #[arg(long, default_value = "22")]
+        ssh_port: u16,
+        /// Skip advertising this host as `_sailor._tcp` on the LAN.
+        #[arg(long)]
+        no_advertise: bool,
     },
     /// Advertise this host as a `_sailor._tcp` Bonjour service on the LAN
     /// so the sailor app can auto-discover it. The TXT record carries the
@@ -45,6 +94,23 @@ pub enum Command {
         /// SSH port the phone should connect to (mosh bootstraps over SSH).
         #[arg(long, default_value = "22")]
         ssh_port: u16,
+    },
+    /// Configure or test self-hostable push (ntfy / Gotify / UnifiedPush).
+    /// With no flags, prints the current setup.
+    Push {
+        /// Endpoint URL: an ntfy topic, a Gotify server base, or a
+        /// UnifiedPush endpoint.
+        #[arg(long)]
+        set: Option<String>,
+        /// Endpoint type.
+        #[arg(long, default_value = "ntfy")]
+        kind: String,
+        /// ntfy access token (optional) or Gotify application token.
+        #[arg(long)]
+        token: Option<String>,
+        /// Send a test notification through the configured endpoint.
+        #[arg(long)]
+        test: bool,
     },
     /// Print daemon + hook status.
     Status {

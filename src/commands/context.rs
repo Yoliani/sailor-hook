@@ -4,19 +4,9 @@
 //! debugging the multiplexer detection that drives the session picker.
 
 use crate::context;
-use serde_json::json;
 
 pub fn run() -> anyhow::Result<()> {
     let ctx = context::detect();
-    println!(
-        "{}",
-        serde_json::to_string_pretty(&json!({
-            "kind": ctx.kind.as_str(),
-            "session": ctx.session,
-            "pane": ctx.pane,
-            "workspace": ctx.workspace,
-            "cwd": ctx.cwd,
-        }))?
-    );
+    println!("{}", serde_json::to_string_pretty(&ctx.to_json())?);
     Ok(())
 }
