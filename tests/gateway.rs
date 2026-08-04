@@ -80,6 +80,31 @@ impl Sandbox {
         serde_json::from_str(body.trim()).expect("json body")
     }
 
+    /// POST a JSON body, returning (status, body).
+    async fn post_json(&self, path: &str, body: &serde_json::Value) -> (u16, String) {
+        let mut stream = tokio::net::TcpStream::connect(("127.0.0.1", self.port))
+            .await
+            .expect("connect");
+        let body = serde_json::to_string(body).unwrap();
+        stream
+            .write_all(
+                format!(
+                    "POST {path} HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                )
+                .as_bytes(),
+            )
+            .await
+            .unwrap();
+        let mut raw = String::new();
+        stream.read_to_string(&mut raw).await.unwrap();
+        let status: u16 = raw.split_whitespace().nth(1).unwrap().parse().unwrap();
+        (
+            status,
+            raw.split("\r\n\r\n").nth(1).unwrap_or("").to_string(),
+        )
+    }
+
     /// Spawn the hook shim with a payload on stdin. Returns the child so a
     /// blocking approval can be answered before it is awaited.
     fn fire_hook(&self, payload: &str, extra: &[&str]) -> Child {
@@ -275,6 +300,45 @@ async fn denying_produces_a_deny_decision() {
         "deny"
     );
     assert_eq!(sandbox.get_json("/events").await[0]["resolution"], "denied");
+}
+
+/// The gateway answers approvals too — the Easy Pair inbox has no SSH exec
+/// to run `sailor-hook approve` on, so the phone POSTs the decision.
+#[tokio::test]
+async fn gateway_approve_resolves_the_parked_hook() {
+    let sandbox = Sandbox::start(24690).await;
+    let mut hook = sandbox.fire_hook(APPROVAL, &["--wait-secs", "30"]);
+    settle().await;
+
+    let id = sandbox.pending_action_id().await;
+    let (status, body) = sandbox
+        .post_json(
+            "/approve",
+            &serde_json::json!({ "pending_action_id": id, "allow": true }),
+        )
+        .await;
+    assert_eq!(status, 200, "approve should succeed: {body}");
+
+    let decision = hook_decision(&mut hook)
+        .await
+        .expect("hook printed a decision");
+    assert_eq!(
+        decision["hookSpecificOutput"]["decision"]["behavior"],
+        "allow"
+    );
+    assert_eq!(
+        sandbox.get_json("/events").await[0]["resolution"],
+        "allowed"
+    );
+
+    // Answering again is a miss — nothing is parked twice.
+    let (status, _) = sandbox
+        .post_json(
+            "/approve",
+            &serde_json::json!({ "pending_action_id": id, "allow": false }),
+        )
+        .await;
+    assert_eq!(status, 404);
 }
 
 /// The safety property: an approval nobody answers must fall through to the

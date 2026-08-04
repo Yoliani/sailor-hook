@@ -58,10 +58,7 @@ async fn main() -> anyhow::Result<()> {
             }
             commands::approve::run(pending_action_id, allow).await
         }
-        Command::Inbox {
-            watch,
-            stdin_approvals,
-        } => commands::inbox::run(watch, stdin_approvals).await,
+        Command::Inbox { watch } => commands::inbox::run(watch).await,
         Command::Install { agent } => commands::install::run(agent).await,
         Command::Uninstall { agent } => commands::uninstall::run(agent).await,
         Command::Serve {

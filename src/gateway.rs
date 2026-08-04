@@ -17,6 +17,7 @@ use axum::response::{IntoResponse, Response};
 use axum::{routing::get, Json, Router};
 
 use crate::inbox::{Inbox, Row};
+use crate::pending::Pending;
 
 /// What the gateway handlers share. `token` is `None` for a loopback-only
 /// bind, which is reachable solely through the user's own SSH session and so
@@ -24,6 +25,7 @@ use crate::inbox::{Inbox, Row};
 #[derive(Clone)]
 pub struct GatewayState {
     pub inbox: Arc<Inbox>,
+    pub pending: Arc<Pending>,
     pub token: Option<Arc<str>>,
 }
 
@@ -42,6 +44,7 @@ pub fn router(state: GatewayState) -> Router {
             Router::new()
                 .route("/context", get(context))
                 .route("/events", get(events))
+                .route("/approve", axum::routing::post(approve))
                 .route("/mux-list", get(mux_list))
                 .route("/diff", get(diff))
                 .route("/preview", get(preview))
@@ -110,6 +113,34 @@ async fn events(ws: Option<WebSocketUpgrade>, State(inbox): State<Arc<Inbox>>) -
     }
 }
 
+/// Answer a parked approval. The Easy Pair inbox's only write: a mosh-only
+/// session has no SSH exec to run `sailor-hook approve` on, so the phone
+/// POSTs the decision here instead. Same semantics as the CLI — resolves the
+/// parked shim *and* marks the row — so the two paths can't drift.
+#[derive(serde::Deserialize)]
+struct ApproveBody {
+    /// The app's row model is camelCase everywhere (the wire serializes
+    /// `Row` that way), so the HTTP body arrives as `pendingActionId` even
+    /// though the CLI uses snake_case internally.
+    #[serde(alias = "pendingActionId")]
+    pending_action_id: uuid::Uuid,
+    allow: bool,
+}
+
+async fn approve(State(state): State<GatewayState>, Json(body): Json<ApproveBody>) -> Response {
+    let resolved = state.pending.resolve(body.pending_action_id, body.allow);
+    if resolved {
+        state.inbox.resolve(body.pending_action_id, body.allow);
+        (StatusCode::OK, "ok").into_response()
+    } else {
+        (
+            StatusCode::NOT_FOUND,
+            "no approval is waiting on that id (already answered, or it timed out)",
+        )
+            .into_response()
+    }
+}
+
 async fn stream_events(mut socket: WebSocket, inbox: Arc<Inbox>) {
     // Subscribe before snapshotting so an event landing in between is
     // delivered late rather than lost.
@@ -163,6 +194,7 @@ pub async fn serve(
     bind: IpAddr,
     port: u16,
     inbox: Arc<Inbox>,
+    pending: Arc<Pending>,
     token: Option<String>,
 ) -> anyhow::Result<()> {
     if !bind.is_loopback() && token.is_none() {
@@ -180,6 +212,7 @@ pub async fn serve(
     let listener = tokio::net::TcpListener::bind(addr).await?;
     let state = GatewayState {
         inbox,
+        pending,
         token: token.map(Arc::from),
     };
     axum::serve(listener, router(state)).await?;

@@ -74,12 +74,6 @@ pub enum Command {
         /// Keep the connection open and stream updates as they arrive.
         #[arg(long)]
         watch: bool,
-        /// Also read approval answers as `{"pendingActionId":…,"allow":…}`
-        /// lines from stdin. The Easy Pair inbox channel: `easy-pair` starts
-        /// a second mosh-server running this, so a mosh-only session can
-        /// answer approvals without any SSH leg.
-        #[arg(long)]
-        stdin_approvals: bool,
     },
     /// Write sailor-owned hook entries into supported agent config files.
     Install {

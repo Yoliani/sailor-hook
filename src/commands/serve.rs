@@ -49,9 +49,10 @@ pub async fn run(
     }
 
     let listener = ipc::bind(&ipc::socket_path()?)?;
+    let pending = Pending::new();
     let ctx = Arc::new(server::Context {
         inbox: Arc::clone(&inbox),
-        pending: Pending::new(),
+        pending: Arc::clone(&pending),
         on_row: Box::new(move |row| {
             tracing::info!(session = %row.session_id, "inbox: {}", row.title);
 
@@ -98,7 +99,7 @@ pub async fn run(
 
     if !advertise {
         return tokio::select! {
-            res = gateway::serve(bind, port, Arc::clone(&inbox), token.clone()) => res,
+            res = gateway::serve(bind, port, Arc::clone(&inbox), Arc::clone(&pending), token.clone()) => res,
             res = ingest => res,
             _ = prune => Ok(()),
             _ = herdr_state => Ok(()),
@@ -108,7 +109,7 @@ pub async fn run(
     // `discovery::advertise` blocks until Ctrl-C and deregisters the Bonjour
     // service on the way out, so it's what drives a clean shutdown here.
     tokio::select! {
-        res = gateway::serve(bind, port, Arc::clone(&inbox), token.clone()) => res,
+        res = gateway::serve(bind, port, Arc::clone(&inbox), Arc::clone(&pending), token.clone()) => res,
         res = discovery::advertise(ssh_port) => res,
         res = ingest => res,
         _ = prune => Ok(()),

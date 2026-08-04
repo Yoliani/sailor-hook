@@ -33,12 +33,6 @@ pub async fn run(
         )
     })?;
 
-    // A mosh-only session has no SSH leg to exec `sailor-hook inbox` on, so
-    // the inbox needs its own channel: a second mosh-server running
-    // `inbox --watch --stdin-approvals`. The phone's second mosh connection
-    // streams rows and answers approvals over the pty (commands/inbox.rs).
-    let inbox = spawn_inbox_session(colors)?;
-
     let host = match host {
         Some(h) => h,
         None => local_ip().ok_or_else(|| {
@@ -58,12 +52,6 @@ pub async fn run(
     }
     if let Some(name) = &name {
         uri.push_str(&format!("&name={}", percent_encode(name)));
-    }
-    if let Some((inbox_port, inbox_key)) = &inbox {
-        uri.push_str(&format!(
-            "&inboxPort={inbox_port}&inboxKey={}",
-            percent_encode(inbox_key)
-        ));
     }
     // A mosh session is one channel and mosh only transmits the visible
     // screen, so anything the app wants to *read* from the host (session
@@ -105,11 +93,6 @@ pub async fn run(
     println!("  {uri}");
     println!();
     println!("mosh-server is waiting on udp {host}:{port}; the code is single-use.");
-    if inbox.is_some() {
-        println!("A second mosh-server carries the agent inbox on the same host.");
-    } else {
-        println!("No inbox channel: this binary can't locate itself.");
-    }
     match (&gateway, started_gateway) {
         // Starting a network listener on the user's behalf is a side effect
         // that outlives this command, so say so plainly rather than leaving
@@ -133,34 +116,6 @@ pub async fn run(
         ),
     }
     Ok(())
-}
-
-/// Start the inbox channel: a mosh-server whose command is
-/// `sailor-hook inbox --watch --stdin-approvals`. Returns its
-/// `(port, key)` so the URI can carry it. `None` when this binary can't
-/// reach itself (moved after build) — the shell session still works, the
-/// phone just gets no inbox for it.
-fn spawn_inbox_session(colors: u16) -> anyhow::Result<Option<(u16, String)>> {
-    let exe = match std::env::current_exe() {
-        Ok(e) => e,
-        Err(_) => return Ok(None),
-    };
-    let out = Command::new("mosh-server")
-        .args([
-            "new",
-            "-c",
-            &colors.to_string(),
-            "--",
-            exe.to_str().unwrap_or("sailor-hook"),
-            "inbox",
-            "--watch",
-            "--stdin-approvals",
-        ])
-        .env("LC_ALL", "en_US.UTF-8")
-        .output()
-        .map_err(|e| anyhow::anyhow!("could not start the inbox mosh-server ({e})"))?;
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    Ok(parse_connect_line(&stdout))
 }
 
 /// The address behind `--host`, if this machine holds it.
