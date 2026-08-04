@@ -191,19 +191,26 @@ struct DiffQuery {
     dir: Option<String>,
 }
 
-async fn diff_handler(
-    State(_state): State<Arc<Inbox>>,
-    Query(q): Query<DiffQuery>,
-) -> Response {
-    let dir = q.dir.unwrap_or_else(|| {
+/// The repository a request operates on: an explicit path, or the directory
+/// the daemon was started in.
+fn repo_or_cwd(explicit: Option<String>) -> String {
+    explicit.unwrap_or_else(|| {
         std::env::current_dir()
             .unwrap_or_else(|_| std::path::PathBuf::from("."))
             .to_string_lossy()
             .into_owned()
-    });
-    let staged = q.staged.unwrap_or(true);
-    let unstaged = q.unstaged.unwrap_or(true);
-    let untracked = q.untracked.unwrap_or(true);
+    })
+}
+
+async fn diff_handler(State(_state): State<Arc<Inbox>>, Query(q): Query<DiffQuery>) -> Response {
+    let dir = repo_or_cwd(q.dir);
+    // Naming a scope selects it exclusively; naming none asks for all three.
+    // Without this, `?staged=true` would leave the other two defaulted to
+    // true and every tab would return an identical, unfiltered list.
+    let any_scope = q.staged.is_some() || q.unstaged.is_some() || q.untracked.is_some();
+    let staged = q.staged.unwrap_or(!any_scope);
+    let unstaged = q.unstaged.unwrap_or(!any_scope);
+    let untracked = q.untracked.unwrap_or(!any_scope);
     match diff::collect_changes(
         std::path::Path::new(&dir),
         staged,
@@ -225,7 +232,7 @@ async fn diff_handler(
 /// /browse query params
 #[derive(serde::Deserialize)]
 struct BrowseQuery {
-    repo: String,
+    repo: Option<String>,
     file: String,
     commit: Option<String>,
 }
@@ -234,13 +241,10 @@ async fn browse_handler(
     State(_state): State<Arc<Inbox>>,
     Query(q): Query<BrowseQuery>,
 ) -> Response {
-    match diff::read_file(
-        std::path::Path::new(&q.repo),
-        q.commit.as_deref(),
-        &q.file,
-    ) {
+    let repo = repo_or_cwd(q.repo);
+    match diff::read_file(std::path::Path::new(&repo), q.commit.as_deref(), &q.file) {
         Ok(Some(contents)) => Json(serde_json::json!({
-            "repo": q.repo,
+            "repo": repo,
             "file": q.file,
             "contents": contents,
         }))
@@ -253,7 +257,7 @@ async fn browse_handler(
 /// /browse/list query params
 #[derive(serde::Deserialize)]
 struct BrowseListQuery {
-    repo: String,
+    repo: Option<String>,
     commit: Option<String>,
 }
 
@@ -261,9 +265,10 @@ async fn browse_list_handler(
     State(_state): State<Arc<Inbox>>,
     Query(q): Query<BrowseListQuery>,
 ) -> Response {
-    match diff::list_files(std::path::Path::new(&q.repo), q.commit.as_deref()) {
+    let repo = repo_or_cwd(q.repo);
+    match diff::list_files(std::path::Path::new(&repo), q.commit.as_deref()) {
         Ok(Some(files)) => Json(serde_json::json!({
-            "repo": q.repo,
+            "repo": repo,
             "files": files,
         }))
         .into_response(),
