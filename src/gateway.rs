@@ -9,6 +9,7 @@
 use std::net::IpAddr;
 use std::sync::Arc;
 
+use axum::extract::Query;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{FromRef, Request, State};
 use axum::http::StatusCode;
@@ -18,6 +19,7 @@ use axum::{routing::get, Json, Router};
 
 use crate::inbox::{Inbox, Row};
 use crate::pending::Pending;
+use crate::{diff, preview};
 
 /// What the gateway handlers share. `token` is `None` for a loopback-only
 /// bind, which is reachable solely through the user's own SSH session and so
@@ -46,8 +48,10 @@ pub fn router(state: GatewayState) -> Router {
                 .route("/events", get(events))
                 .route("/approve", axum::routing::post(approve))
                 .route("/mux-list", get(mux_list))
-                .route("/diff", get(diff))
-                .route("/preview", get(preview))
+                .route("/diff", get(diff_handler))
+                .route("/browse", get(browse_handler))
+                .route("/browse/list", get(browse_list_handler))
+                .route("/preview", get(preview_handler))
                 .layer(axum::middleware::from_fn_with_state(
                     state.clone(),
                     require_token,
@@ -175,14 +179,110 @@ async fn mux_list() -> Json<serde_json::Value> {
     Json(crate::commands::mux_list::collect())
 }
 
-async fn diff() -> &'static str {
-    // Phase 4: git diff web app (staged/unstaged/untracked) + /browse.
-    "diff: not yet implemented"
+// --- Phase 4: diff viewer & browser preview ---
+
+/// /diff query params
+#[derive(serde::Deserialize)]
+struct DiffQuery {
+    staged: Option<bool>,
+    unstaged: Option<bool>,
+    untracked: Option<bool>,
+    commit: Option<String>,
+    dir: Option<String>,
 }
 
-async fn preview() -> &'static str {
-    // Phase 4: list detected localhost HTTP servers.
-    "preview: not yet implemented"
+async fn diff_handler(
+    State(_state): State<Arc<Inbox>>,
+    Query(q): Query<DiffQuery>,
+) -> Response {
+    let dir = q.dir.unwrap_or_else(|| {
+        std::env::current_dir()
+            .unwrap_or_else(|_| std::path::PathBuf::from("."))
+            .to_string_lossy()
+            .into_owned()
+    });
+    let staged = q.staged.unwrap_or(true);
+    let unstaged = q.unstaged.unwrap_or(true);
+    let untracked = q.untracked.unwrap_or(true);
+    match diff::collect_changes(
+        std::path::Path::new(&dir),
+        staged,
+        unstaged,
+        untracked,
+        q.commit.as_deref(),
+    ) {
+        Ok(Some(changes)) => Json(serde_json::json!({
+            "repo": dir,
+            "changes": changes,
+            "total": changes.len(),
+        }))
+        .into_response(),
+        Ok(None) => (StatusCode::NOT_FOUND, "not a git repository").into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+/// /browse query params
+#[derive(serde::Deserialize)]
+struct BrowseQuery {
+    repo: String,
+    file: String,
+    commit: Option<String>,
+}
+
+async fn browse_handler(
+    State(_state): State<Arc<Inbox>>,
+    Query(q): Query<BrowseQuery>,
+) -> Response {
+    match diff::read_file(
+        std::path::Path::new(&q.repo),
+        q.commit.as_deref(),
+        &q.file,
+    ) {
+        Ok(Some(contents)) => Json(serde_json::json!({
+            "repo": q.repo,
+            "file": q.file,
+            "contents": contents,
+        }))
+        .into_response(),
+        Ok(None) => (StatusCode::NOT_FOUND, "file not found").into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+/// /browse/list query params
+#[derive(serde::Deserialize)]
+struct BrowseListQuery {
+    repo: String,
+    commit: Option<String>,
+}
+
+async fn browse_list_handler(
+    State(_state): State<Arc<Inbox>>,
+    Query(q): Query<BrowseListQuery>,
+) -> Response {
+    match diff::list_files(std::path::Path::new(&q.repo), q.commit.as_deref()) {
+        Ok(Some(files)) => Json(serde_json::json!({
+            "repo": q.repo,
+            "files": files,
+        }))
+        .into_response(),
+        Ok(None) => (StatusCode::NOT_FOUND, "not a git repository").into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+async fn preview_handler(
+    State(_state): State<Arc<Inbox>>,
+) -> Response {
+    match preview::discover() {
+        Ok(servers) => Json(serde_json::json!({
+            "servers": servers,
+            "total": servers.len(),
+        }))
+        .into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
 }
 
 /// Bind the gateway to `bind`:<port>. Called by `commands::serve`.
@@ -231,4 +331,5 @@ mod tests {
         assert!(!constant_time_eq(b"abc", b"abc123"));
         assert!(!constant_time_eq(b"", b"abc"));
     }
+
 }
