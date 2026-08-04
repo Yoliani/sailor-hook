@@ -1,0 +1,130 @@
+name: Release
+
+# Cuts a GitHub release and updates the Homebrew tap when the version in
+# Cargo.toml changes. Merges without a version bump are a no-op, so the
+# release is driven by the version field rather than by every merge.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  TAP_REPO: Yoliani/homebrew-sailor
+  FORMULA_PATH: Formula/sailor-hook.rb
+
+jobs:
+  check-version:
+    name: Check for version bump
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+      should_release: ${{ steps.version.outputs.should_release }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Read version and check tag
+        id: version
+        run: |
+          version=$(grep -m1 '^version = ' Cargo.toml | cut -d'"' -f2)
+          tag="v${version}"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          if git rev-parse -q --verify "refs/tags/${tag}" >/dev/null; then
+            echo "Tag ${tag} already exists — nothing to release."
+            echo "should_release=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "Releasing ${tag}."
+            echo "should_release=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  release:
+    name: Tag and publish release
+    needs: check-version
+    if: needs.check-version.outputs.should_release == 'true'
+    runs-on: ubuntu-latest
+    outputs:
+      sha256: ${{ steps.tarball.outputs.sha256 }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      # The release is the thing users install, so re-run the gates rather
+      # than trusting the PR run that produced this merge commit.
+      - name: Verify
+        run: |
+          cargo fmt --all -- --check
+          cargo clippy --all-targets -- -D warnings
+          cargo test
+
+      - name: Create tag and release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.check-version.outputs.tag }}
+          VERSION: ${{ needs.check-version.outputs.version }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG" -m "sailor-hook $VERSION"
+          git push origin "$TAG"
+          gh release create "$TAG" \
+            --title "sailor-hook $VERSION" \
+            --generate-notes
+
+      - name: Checksum source tarball
+        id: tarball
+        env:
+          TAG: ${{ needs.check-version.outputs.tag }}
+        run: |
+          url="https://github.com/${GITHUB_REPOSITORY}/archive/refs/tags/${TAG}.tar.gz"
+          # Retry: the archive endpoint can lag the tag push by a few seconds.
+          for attempt in 1 2 3 4 5; do
+            if curl -fsSL --retry 3 -o source.tar.gz "$url"; then break; fi
+            echo "Archive not ready (attempt ${attempt}); retrying."
+            sleep 5
+          done
+          sha256=$(sha256sum source.tar.gz | cut -d' ' -f1)
+          echo "sha256=${sha256}" >> "$GITHUB_OUTPUT"
+          echo "Tarball sha256: ${sha256}"
+
+  update-tap:
+    name: Update Homebrew tap
+    needs: [check-version, release]
+    runs-on: ubuntu-latest
+    steps:
+      # GITHUB_TOKEN cannot write to another repo, so this needs a PAT with
+      # contents:write on the tap, stored as HOMEBREW_TAP_TOKEN.
+      - name: Checkout tap
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.TAP_REPO }}
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: tap
+
+      - name: Bump formula
+        working-directory: tap
+        env:
+          TAG: ${{ needs.check-version.outputs.tag }}
+          VERSION: ${{ needs.check-version.outputs.version }}
+          SHA256: ${{ needs.release.outputs.sha256 }}
+        run: |
+          url="https://github.com/${GITHUB_REPOSITORY}/archive/refs/tags/${TAG}.tar.gz"
+          sed -i -E \
+            -e "s|^(  url ).*|\1\"${url}\"|" \
+            -e "s|^(  sha256 ).*|\1\"${SHA256}\"|" \
+            "${FORMULA_PATH}"
+          if git diff --quiet "${FORMULA_PATH}"; then
+            echo "Formula already up to date."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -am "sailor-hook ${VERSION}"
+          git push

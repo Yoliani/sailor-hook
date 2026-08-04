@@ -5,7 +5,7 @@ edition = "2021"
 rust-version = "1.75"
 license = "MIT"
 description = "Host daemon that bridges AI coding agents to the sailor mobile app."
-repository = "https://github.com/usesailor/sailor"
+repository = "https://github.com/Yoliani/sailor-hook"
 homepage = "https://sailor.dev"
 
 [[bin]]
