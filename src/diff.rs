@@ -125,11 +125,7 @@ pub fn list_files(dir: &Path, commit: Option<&str>) -> anyhow::Result<Option<Vec
 /// Read one file's contents at a commit, or from the working tree when
 /// `commit` is `None` (untracked files). Confined to the repo root. Returns
 /// `Ok(None)` when the file doesn't exist there.
-pub fn read_file(
-    dir: &Path,
-    commit: Option<&str>,
-    rel: &str,
-) -> anyhow::Result<Option<String>> {
+pub fn read_file(dir: &Path, commit: Option<&str>, rel: &str) -> anyhow::Result<Option<String>> {
     let dir = canonicalize_dir(dir)?;
     if !is_git_repo(&dir)? {
         return Ok(None);
@@ -271,9 +267,9 @@ fn parse_diffgit_header(line: &str) -> Option<(String, String)> {
 // ---------------------------------------------------------------------------
 
 fn canonicalize_dir(dir: &Path) -> anyhow::Result<PathBuf> {
-    let dir = dir.canonicalize().with_context(|| {
-        format!("path does not exist: {}", dir.display())
-    })?;
+    let dir = dir
+        .canonicalize()
+        .with_context(|| format!("path does not exist: {}", dir.display()))?;
     if !dir.is_dir() {
         anyhow::bail!("not a directory: {}", dir.display());
     }
@@ -310,13 +306,9 @@ mod tests {
     impl Repo {
         fn new() -> Repo {
             let dir = tempfile::tempdir().unwrap();
-            git(&dir.path(), ["init", "-q"]).unwrap();
-            git(
-                &dir.path(),
-                ["config", "user.email", "test@example.com"],
-            )
-            .unwrap();
-            git(&dir.path(), ["config", "user.name", "test"]).unwrap();
+            git(dir.path(), ["init", "-q"]).unwrap();
+            git(dir.path(), ["config", "user.email", "test@example.com"]).unwrap();
+            git(dir.path(), ["config", "user.name", "test"]).unwrap();
             Repo { dir }
         }
 
@@ -327,12 +319,8 @@ mod tests {
         }
 
         fn commit_all(&self, message: &str) {
-            git(&self.dir.path(), ["add", "-A"]).unwrap();
-            git(
-                &self.dir.path(),
-                ["commit", "-q", "-m", message],
-            )
-            .unwrap();
+            git(self.dir.path(), ["add", "-A"]).unwrap();
+            git(self.dir.path(), ["commit", "-q", "-m", message]).unwrap();
         }
     }
 
@@ -344,17 +332,21 @@ mod tests {
         repo.commit_all("initial");
 
         repo.write("a.txt", "one\nchanged\n");
-        git(&repo.dir.path(), ["add", "a.txt"]).unwrap();
+        git(repo.dir.path(), ["add", "a.txt"]).unwrap();
         repo.write("b.txt", "keep\nalso\n");
         repo.write("new.txt", "brand new\n");
 
-        let changes =
-            collect_changes(repo.dir.path(), true, true, true, None)
-                .unwrap()
-                .unwrap();
+        let changes = collect_changes(repo.dir.path(), true, true, true, None)
+            .unwrap()
+            .unwrap();
 
         for c in &changes {
-            eprintln!("Change: {} ({:?}), patch_len={}", c.name, c.status, c.patch.len());
+            eprintln!(
+                "Change: {} ({:?}), patch_len={}",
+                c.name,
+                c.status,
+                c.patch.len()
+            );
             eprintln!("Patch:\n{}", c.patch);
         }
 
@@ -379,14 +371,13 @@ mod tests {
 
         repo.write("added.txt", "hi\n");
         // git mv needs the source file to exist, so rename before rm
-        git(&repo.dir.path(), ["mv", "keep.txt", "moved.txt"]).unwrap();
+        git(repo.dir.path(), ["mv", "keep.txt", "moved.txt"]).unwrap();
         std::fs::remove_file(repo.dir.path().join("keep.txt")).ok();
-        git(&repo.dir.path(), ["add", "-A"]).unwrap();
+        git(repo.dir.path(), ["add", "-A"]).unwrap();
 
-        let changes =
-            collect_changes(repo.dir.path(), true, false, false, None)
-                .unwrap()
-                .unwrap();
+        let changes = collect_changes(repo.dir.path(), true, false, false, None)
+            .unwrap()
+            .unwrap();
 
         let added = changes.iter().find(|c| c.name == "added.txt").unwrap();
         assert_eq!(added.status, ChangeStatus::Added);
@@ -404,10 +395,9 @@ mod tests {
         repo.write("a.txt", "two\n");
         repo.commit_all("second");
 
-        let changes =
-            collect_changes(repo.dir.path(), false, false, false, Some("HEAD~1"))
-                .unwrap()
-                .unwrap();
+        let changes = collect_changes(repo.dir.path(), false, false, false, Some("HEAD~1"))
+            .unwrap()
+            .unwrap();
         assert_eq!(changes.len(), 1);
         assert!(changes[0].patch.contains("-one") && changes[0].patch.contains("+two"));
     }
@@ -416,11 +406,9 @@ mod tests {
     fn non_git_dir_returns_none() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("x.txt"), "x").unwrap();
-        assert!(
-            collect_changes(dir.path(), true, true, true, None)
-                .unwrap()
-                .is_none()
-        );
+        assert!(collect_changes(dir.path(), true, true, true, None)
+            .unwrap()
+            .is_none());
     }
 
     #[test]
@@ -432,10 +420,9 @@ mod tests {
         let files = list_files(repo.dir.path(), None).unwrap().unwrap();
         assert!(files.iter().any(|f| f == "src/a.ts"));
 
-        let contents =
-            read_file(repo.dir.path(), Some("HEAD"), "src/a.ts")
-                .unwrap()
-                .unwrap();
+        let contents = read_file(repo.dir.path(), Some("HEAD"), "src/a.ts")
+            .unwrap()
+            .unwrap();
         assert_eq!(contents, "export const a = 1;\n");
     }
 

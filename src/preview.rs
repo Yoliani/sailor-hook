@@ -117,9 +117,8 @@ fn probe_http(addr: &SocketAddr) -> anyhow::Result<Option<String>> {
     stream
         .set_read_timeout(Some(Duration::from_millis(300)))
         .ok();
-    let _ = stream.write_all(
-        b"GET / HTTP/1.1\r\nHost: 127.0.0.1:8080\r\nConnection: close\r\n\r\n",
-    );
+    let _ =
+        stream.write_all(b"GET / HTTP/1.1\r\nHost: 127.0.0.1:8080\r\nConnection: close\r\n\r\n");
     let mut buf = Vec::new();
     let mut n = 0usize;
     loop {
@@ -185,10 +184,7 @@ mod tests {
     fn parse_socket_v4() {
         assert_eq!(
             parse_socket("127.0.0.1:8080"),
-            Some(SocketAddr::new(
-                "127.0.0.1".parse().unwrap(),
-                8080
-            ))
+            Some(SocketAddr::new("127.0.0.1".parse().unwrap(), 8080))
         );
     }
 
@@ -196,10 +192,7 @@ mod tests {
     fn parse_socket_v6() {
         assert_eq!(
             parse_socket("[::1]:3000"),
-            Some(SocketAddr::new(
-                "::1".parse().unwrap(),
-                3000
-            ))
+            Some(SocketAddr::new("::1".parse().unwrap(), 3000))
         );
     }
 
@@ -207,10 +200,7 @@ mod tests {
     fn parse_socket_with_listen_suffix() {
         assert_eq!(
             parse_socket("127.0.0.1:8080 (LISTEN)"),
-            Some(SocketAddr::new(
-                "127.0.0.1".parse().unwrap(),
-                8080
-            ))
+            Some(SocketAddr::new("127.0.0.1".parse().unwrap(), 8080))
         );
     }
 }

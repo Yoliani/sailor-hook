@@ -9,8 +9,8 @@
 use std::net::IpAddr;
 use std::sync::Arc;
 
-use axum::extract::Query;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
+use axum::extract::Query;
 use axum::extract::{FromRef, Request, State};
 use axum::http::StatusCode;
 use axum::middleware::Next;
@@ -277,9 +277,7 @@ async fn browse_list_handler(
     }
 }
 
-async fn preview_handler(
-    State(_state): State<Arc<Inbox>>,
-) -> Response {
+async fn preview_handler(State(_state): State<Arc<Inbox>>) -> Response {
     match preview::discover() {
         Ok(servers) => Json(serde_json::json!({
             "servers": servers,
@@ -336,5 +334,4 @@ mod tests {
         assert!(!constant_time_eq(b"abc", b"abc123"));
         assert!(!constant_time_eq(b"", b"abc"));
     }
-
 }
