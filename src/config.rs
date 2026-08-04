@@ -1,8 +1,13 @@
 //! Agent hook config locations — where `sailor-hook install` writes
 //! sailor-owned entries. Mirrors Moshi's targets (see `TECH.md` §3).
 //!
-//! Phase 0: only the path table. Phase 3 adds the actual read/merge/write of
-//! each config format (JSON, TOML, TS plugin).
+//! Two paths differ from the TECH.md table, per the agents' current docs:
+//! OpenCode's global plugin dir (`~/.config/opencode/plugins/`) replaces the
+//! per-project `.opencode/plugins/` — a user-level install must work in every
+//! project, and per-project would only activate in the directory it was run
+//! from. Kimi's CLI moved to `~/.kimi-code/` (the `~/.kimi/` path is the old
+//! one; the current docs and the kimi-cli source both read `config.toml`
+//! under `~/.kimi-code/`).
 
 use std::path::PathBuf;
 
@@ -15,6 +20,7 @@ pub enum Agent {
     Cursor,
     Kimi,
     Qwen,
+    Pi,
 }
 
 impl Agent {
@@ -27,6 +33,7 @@ impl Agent {
             Agent::Cursor,
             Agent::Kimi,
             Agent::Qwen,
+            Agent::Pi,
         ]
     }
 
@@ -39,6 +46,7 @@ impl Agent {
             Agent::Cursor => "cursor",
             Agent::Kimi => "kimi",
             Agent::Qwen => "qwen",
+            Agent::Pi => "pi",
         }
     }
 
@@ -51,6 +59,7 @@ impl Agent {
             "cursor" => Agent::Cursor,
             "kimi" => Agent::Kimi,
             "qwen" => Agent::Qwen,
+            "pi" => Agent::Pi,
             _ => return None,
         })
     }
@@ -80,13 +89,22 @@ pub fn targets_for(filter: Option<&str>) -> anyhow::Result<Vec<Target>> {
             Agent::ClaudeCode => home.join(".claude").join("settings.json"),
             Agent::Codex => home.join(".codex").join("hooks.json"),
             Agent::OpenCode => home
-                .join(".opencode")
+                .join(".config")
+                .join("opencode")
                 .join("plugins")
                 .join("sailor-hooks.ts"),
             Agent::Gemini => home.join(".gemini").join("settings.json"),
             Agent::Cursor => home.join(".cursor").join("hooks.json"),
-            Agent::Kimi => home.join(".kimi").join("config.toml"),
+            Agent::Kimi => home.join(".kimi-code").join("config.toml"),
             Agent::Qwen => home.join(".qwen").join("settings.json"),
+            // pi has no hooks file — support is a pi extension (the same one
+            // this repo carries at `.pi/extensions/sailor-hooks.ts`), copied
+            // into pi's global extensions dir so every pi session reports.
+            Agent::Pi => home
+                .join(".pi")
+                .join("agent")
+                .join("extensions")
+                .join("sailor-hooks.ts"),
         };
         out.push(Target {
             agent: a.id(),

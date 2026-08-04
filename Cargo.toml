@@ -25,6 +25,9 @@ tower-http = { version = "0.6", features = ["fs", "trace"] }
 # agent settings file, and reordering their keys would be a gratuitous diff.
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
+# Kimi's hook config is TOML (`~/.kimi-code/config.toml`), the one non-JSON
+# agent config install touches.
+toml = { version = "0.8", features = ["preserve_order"] }
 # Logging / errors
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

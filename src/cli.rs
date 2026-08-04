@@ -30,12 +30,24 @@ pub enum Command {
         /// Terminal color count mosh-server advertises (8 or 256).
         #[arg(long, default_value = "256")]
         colors: u16,
+        /// Gateway port to probe. When a daemon answers there, the QR also
+        /// carries its token so the app can list sessions over HTTP instead
+        /// of by typing probes into your terminal.
+        #[arg(long, default_value = "24543")]
+        gateway_port: u16,
+        /// Don't start a daemon if none is running. By default `easy-pair`
+        /// launches one bound to `--host` (when that address belongs to this
+        /// machine) so session listing works without a second command; this
+        /// leaves the phone falling back to probing your terminal.
+        #[arg(long)]
+        no_serve: bool,
     },
     /// Normalize one agent hook payload (read from stdin) and post it to the
     /// running daemon. This is what `install` wires into each agent's config;
     /// it is not meant to be run by hand.
     Event {
-        /// Agent whose payload format to expect (currently `claude_code`).
+        /// Agent whose payload format to expect
+        /// (claude_code, codex, gemini, cursor, kimi, qwen, opencode, pi).
         #[arg(long)]
         agent: String,
         /// How long to park a decidable approval waiting for the phone
@@ -62,10 +74,16 @@ pub enum Command {
         /// Keep the connection open and stream updates as they arrive.
         #[arg(long)]
         watch: bool,
+        /// Also read approval answers as `{"pendingActionId":…,"allow":…}`
+        /// lines from stdin. The Easy Pair inbox channel: `easy-pair` starts
+        /// a second mosh-server running this, so a mosh-only session can
+        /// answer approvals without any SSH leg.
+        #[arg(long)]
+        stdin_approvals: bool,
     },
     /// Write sailor-owned hook entries into supported agent config files.
     Install {
-        /// Limit to one agent (claude_code, codex, opencode, gemini, cursor, kimi, qwen).
+        /// Limit to one agent (claude_code, codex, opencode, gemini, cursor, kimi, qwen, pi).
         #[arg(long)]
         agent: Option<String>,
     },
@@ -79,6 +97,12 @@ pub enum Command {
         /// Gateway port (default 24543, matching moshi-hook for familiarity).
         #[arg(long, default_value = "24543")]
         port: u16,
+        /// Address the gateway binds. Loopback (the default) is reachable
+        /// only through your own SSH session. Bind a tailnet address (or
+        /// 0.0.0.0) to let an Easy Pair phone reach it directly — that
+        /// requires the bearer token, which the QR then carries.
+        #[arg(long, default_value = "127.0.0.1")]
+        bind: std::net::IpAddr,
         /// SSH port to advertise for LAN auto-discovery (mosh bootstraps over SSH).
         #[arg(long, default_value = "22")]
         ssh_port: u16,
@@ -120,6 +144,11 @@ pub enum Command {
     },
     /// One-shot terminal-context probe (tmux / Zellij / Herdr detection).
     Context,
+    /// Detect installed multiplexers and list their sessions as one line of
+    /// JSON. The app's session browser runs this over an Easy Pair mosh
+    /// session, where the only channel is the user's visible shell — one
+    /// short command instead of a screenful of raw probing.
+    MuxList,
     /// Recent project directories from agent transcript history, as JSON.
     CwdList,
     /// Standalone diff viewer server for a repo, opened in a local browser.

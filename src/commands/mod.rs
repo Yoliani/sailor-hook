@@ -1,5 +1,5 @@
-//! Subcommand implementations. `diff` and `usage` are still Phase 4/5 stubs;
-//! the rest are implemented.
+//! Subcommand implementations. `diff` is still a Phase 4 stub; the rest are
+//! implemented.
 
 pub mod approve;
 pub mod context;
@@ -10,6 +10,7 @@ pub mod event;
 pub mod inbox;
 pub mod install;
 pub mod logs;
+pub mod mux_list;
 pub mod pair;
 pub mod push;
 pub mod serve;

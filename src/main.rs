@@ -16,6 +16,7 @@ mod context;
 mod discovery;
 mod events;
 mod gateway;
+mod herdr;
 mod hostid;
 mod inbox;
 mod ipc;
@@ -40,7 +41,12 @@ async fn main() -> anyhow::Result<()> {
 
     match cli.command {
         Command::Pair { token, store } => commands::pair::run(token, store).await,
-        Command::EasyPair { host, colors } => commands::easy_pair::run(host, colors).await,
+        Command::EasyPair {
+            host,
+            colors,
+            gateway_port,
+            no_serve,
+        } => commands::easy_pair::run(host, colors, gateway_port, !no_serve).await,
         Command::Event { agent, wait_secs } => commands::event::run(agent, wait_secs).await,
         Command::Approve {
             pending_action_id,
@@ -52,14 +58,18 @@ async fn main() -> anyhow::Result<()> {
             }
             commands::approve::run(pending_action_id, allow).await
         }
-        Command::Inbox { watch } => commands::inbox::run(watch).await,
+        Command::Inbox {
+            watch,
+            stdin_approvals,
+        } => commands::inbox::run(watch, stdin_approvals).await,
         Command::Install { agent } => commands::install::run(agent).await,
         Command::Uninstall { agent } => commands::uninstall::run(agent).await,
         Command::Serve {
             port,
+            bind,
             ssh_port,
             no_advertise,
-        } => commands::serve::run(port, ssh_port, !no_advertise).await,
+        } => commands::serve::run(port, bind, ssh_port, !no_advertise).await,
         Command::Advertise { ssh_port } => discovery::advertise(ssh_port).await,
         Command::Push {
             set,
@@ -69,10 +79,11 @@ async fn main() -> anyhow::Result<()> {
         } => commands::push::run(set, kind, token, test).await,
         Command::Status { json } => commands::status::run(json),
         Command::Context => commands::context::run(),
+        Command::MuxList => commands::mux_list::run(),
         Command::CwdList => commands::cwd_list::run(),
         Command::Diff { dir } => commands::diff::run(dir).await,
         Command::Logs { follow } => commands::logs::run(follow),
-        Command::Usage { sync } => commands::usage::run(sync),
+        Command::Usage { sync } => commands::usage::run(sync).await,
         Command::Version => commands::version::run(),
     }
 }

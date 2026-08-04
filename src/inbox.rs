@@ -15,6 +15,7 @@ use uuid::Uuid;
 
 use crate::context::Context;
 use crate::events::{Category, Event, UsageWindow};
+use crate::herdr::AgentState;
 
 /// How long a row stays in the inbox after its last event.
 const ARCHIVE_AFTER_HOURS: i64 = 3;
@@ -39,6 +40,10 @@ pub struct Row {
     pub usage: Vec<UsageWindow>,
     pub context_remaining: Option<f32>,
     pub terminal: Option<Context>,
+    /// Herdr's *native* view of the pane this row's agent runs in — set by
+    /// the daemon's herdr poller, not by hook events. `None` for rows whose
+    /// agent isn't in a herdr pane, or when herdr isn't running.
+    pub agent_state: Option<AgentState>,
     /// How a pending approval was answered, once it has been. `None` while it
     /// is still waiting — which, together with `pending_action_id`, is what
     /// tells the app whether to show Approve/Deny buttons.
@@ -68,6 +73,7 @@ impl Row {
             usage: event.usage.clone(),
             context_remaining: event.context_remaining,
             terminal: event.terminal.clone(),
+            agent_state: None,
             resolution: None,
         }
     }
@@ -164,6 +170,40 @@ impl Inbox {
             }
         };
         if let Some(row) = updated {
+            let _ = self.tx.send(row);
+        }
+    }
+
+    /// Overlay Herdr's native per-pane state onto rows whose agent runs in
+    /// one of `session`'s panes. Rows whose pane has no entry keep whatever
+    /// state they had (a pane Herdr doesn't track isn't a reason to blank
+    /// one). Publishes only the rows that actually changed.
+    pub fn apply_agent_states(&self, session: &str, states: &crate::herdr::AgentStates) {
+        let mut changed = Vec::new();
+        {
+            let mut rows = self.rows.lock().unwrap();
+            for row in rows.values_mut() {
+                let Some(terminal) = &row.terminal else {
+                    continue;
+                };
+                if terminal.kind != crate::context::Kind::Herdr
+                    || terminal.session.as_deref() != Some(session)
+                {
+                    continue;
+                }
+                let Some(pane) = terminal.pane.as_deref() else {
+                    continue;
+                };
+                let Some(state) = states.get(pane) else {
+                    continue;
+                };
+                if row.agent_state != Some(*state) {
+                    row.agent_state = Some(*state);
+                    changed.push(row.clone());
+                }
+            }
+        }
+        for row in changed {
             let _ = self.tx.send(row);
         }
     }
@@ -353,6 +393,71 @@ mod tests {
 
         inbox.apply(event(Category::ToolRunning, session, "Running Bash"));
         assert_eq!(inbox.rows()[0].resolution, None);
+    }
+
+    #[test]
+    fn herdr_native_state_overlays_herdr_rows_only() {
+        use crate::context::Kind;
+        use crate::herdr::AgentState;
+
+        let inbox = Inbox::new();
+        let session = Uuid::new_v4();
+        let mut herdr_row = event(Category::ToolRunning, session, "Running Bash");
+        herdr_row.terminal = Some(Context {
+            kind: Kind::Herdr,
+            session: Some("gami".into()),
+            pane: Some("w1:p1".into()),
+            ..Default::default()
+        });
+        inbox.apply(herdr_row);
+        // A tmux row in the same inbox must be untouched.
+        let mut tmux_row = event(Category::ToolRunning, Uuid::new_v4(), "Running Read");
+        tmux_row.terminal = Some(Context {
+            kind: Kind::Tmux,
+            session: Some("0".into()),
+            pane: Some("%3".into()),
+            ..Default::default()
+        });
+        inbox.apply(tmux_row);
+
+        let mut states = crate::herdr::AgentStates::new();
+        states.insert("w1:p1".into(), AgentState::Blocked);
+        inbox.apply_agent_states("gami", &states);
+
+        let rows = inbox.rows();
+        let herdr = rows.iter().find(|r| r.session_id == session).unwrap();
+        assert_eq!(herdr.agent_state, Some(AgentState::Blocked));
+        let tmux = rows.iter().find(|r| r.session_id != session).unwrap();
+        assert_eq!(tmux.agent_state, None);
+    }
+
+    #[tokio::test]
+    async fn herdr_state_merge_only_publishes_changes() {
+        use crate::context::Kind;
+        use crate::herdr::AgentState;
+
+        let inbox = Inbox::new();
+        let mut rx = inbox.subscribe();
+        let session = Uuid::new_v4();
+        let mut row = event(Category::ToolRunning, session, "Running Bash");
+        row.terminal = Some(Context {
+            kind: Kind::Herdr,
+            session: Some("gami".into()),
+            pane: Some("w1:p1".into()),
+            ..Default::default()
+        });
+        inbox.apply(row);
+        let _ = rx.recv().await.unwrap(); // the ingest event
+
+        let mut states = crate::herdr::AgentStates::new();
+        states.insert("w1:p1".into(), AgentState::Working);
+        inbox.apply_agent_states("gami", &states);
+        let changed = rx.recv().await.unwrap();
+        assert_eq!(changed.agent_state, Some(AgentState::Working));
+
+        // Same state again: no publish.
+        inbox.apply_agent_states("gami", &states);
+        assert!(rx.try_recv().is_err());
     }
 
     #[tokio::test]

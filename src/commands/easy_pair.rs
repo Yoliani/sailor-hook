@@ -8,9 +8,16 @@
 //! lib/easyPair.ts — keep the two in sync). The key is the session's
 //! authentication: it lives only in this terminal and the scanning phone.
 
+use std::net::{IpAddr, SocketAddr, TcpListener, ToSocketAddrs};
+use std::os::unix::process::CommandExt as _;
 use std::process::Command;
 
-pub async fn run(host: Option<String>, colors: u16) -> anyhow::Result<()> {
+pub async fn run(
+    host: Option<String>,
+    colors: u16,
+    gateway_port: u16,
+    serve: bool,
+) -> anyhow::Result<()> {
     // mosh-server needs a UTF-8 locale; a bare env may not have one.
     let output = Command::new("mosh-server")
         .args(["new", "-c", &colors.to_string()])
@@ -25,6 +32,12 @@ pub async fn run(host: Option<String>, colors: u16) -> anyhow::Result<()> {
             String::from_utf8_lossy(&output.stderr)
         )
     })?;
+
+    // A mosh-only session has no SSH leg to exec `sailor-hook inbox` on, so
+    // the inbox needs its own channel: a second mosh-server running
+    // `inbox --watch --stdin-approvals`. The phone's second mosh connection
+    // streams rows and answers approvals over the pty (commands/inbox.rs).
+    let inbox = spawn_inbox_session(colors)?;
 
     let host = match host {
         Some(h) => h,
@@ -46,6 +59,40 @@ pub async fn run(host: Option<String>, colors: u16) -> anyhow::Result<()> {
     if let Some(name) = &name {
         uri.push_str(&format!("&name={}", percent_encode(name)));
     }
+    if let Some((inbox_port, inbox_key)) = &inbox {
+        uri.push_str(&format!(
+            "&inboxPort={inbox_port}&inboxKey={}",
+            percent_encode(inbox_key)
+        ));
+    }
+    // A mosh session is one channel and mosh only transmits the visible
+    // screen, so anything the app wants to *read* from the host (session
+    // listings) can't come back through the terminal once it's larger than a
+    // screenful. When a daemon is reachable at this address, hand the phone
+    // its port + token so it can ask over HTTP instead.
+    let mut gateway = reachable_gateway(&host, gateway_port).await;
+    let mut started_gateway = false;
+    if gateway.is_none() && serve {
+        // Only ever bind an address this machine actually holds. `--host` is
+        // whatever the user typed — a tailnet IP, a MagicDNS name, a LAN
+        // address — and the reliable test for "mine" is whether it can be
+        // bound, which costs nothing and needs no interface enumeration.
+        if let Some(ip) = own_address(&host) {
+            match spawn_gateway(ip, gateway_port) {
+                Ok(()) => {
+                    gateway = await_gateway(&host, gateway_port).await;
+                    started_gateway = gateway.is_some();
+                }
+                Err(e) => tracing::warn!("could not start the gateway: {e}"),
+            }
+        }
+    }
+    if let Some(token) = &gateway {
+        uri.push_str(&format!(
+            "&gw={gateway_port}&gwkey={}",
+            percent_encode(token)
+        ));
+    }
 
     let qr = qrcode::QrCode::new(uri.as_bytes())?;
     let art = qr
@@ -58,7 +105,149 @@ pub async fn run(host: Option<String>, colors: u16) -> anyhow::Result<()> {
     println!("  {uri}");
     println!();
     println!("mosh-server is waiting on udp {host}:{port}; the code is single-use.");
+    if inbox.is_some() {
+        println!("A second mosh-server carries the agent inbox on the same host.");
+    } else {
+        println!("No inbox channel: this binary can't locate itself.");
+    }
+    match (&gateway, started_gateway) {
+        // Starting a network listener on the user's behalf is a side effect
+        // that outlives this command, so say so plainly rather than leaving
+        // them to discover a daemon they never launched.
+        (Some(_), true) => {
+            println!(
+                "started the sailor-hook daemon on {host}:{gateway_port} (logs: {}).",
+                gateway_log_path()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_else(|_| "n/a".into())
+            );
+            println!("session listing will use it. Stop it with `pkill -f 'sailor-hook serve'`.");
+        }
+        (Some(_), false) => {
+            println!("session listing will use the daemon at {host}:{gateway_port}.")
+        }
+        (None, _) => println!(
+            "no daemon reachable at {host}:{gateway_port} — session listing will fall back to \
+             probing the terminal, which mosh truncates for large listings. Start one with \
+             `sailor-hook serve --bind {host}`."
+        ),
+    }
     Ok(())
+}
+
+/// Start the inbox channel: a mosh-server whose command is
+/// `sailor-hook inbox --watch --stdin-approvals`. Returns its
+/// `(port, key)` so the URI can carry it. `None` when this binary can't
+/// reach itself (moved after build) — the shell session still works, the
+/// phone just gets no inbox for it.
+fn spawn_inbox_session(colors: u16) -> anyhow::Result<Option<(u16, String)>> {
+    let exe = match std::env::current_exe() {
+        Ok(e) => e,
+        Err(_) => return Ok(None),
+    };
+    let out = Command::new("mosh-server")
+        .args([
+            "new",
+            "-c",
+            &colors.to_string(),
+            "--",
+            exe.to_str().unwrap_or("sailor-hook"),
+            "inbox",
+            "--watch",
+            "--stdin-approvals",
+        ])
+        .env("LC_ALL", "en_US.UTF-8")
+        .output()
+        .map_err(|e| anyhow::anyhow!("could not start the inbox mosh-server ({e})"))?;
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    Ok(parse_connect_line(&stdout))
+}
+
+/// The address behind `--host`, if this machine holds it.
+///
+/// Binding is the test: a TCP bind to an address the host doesn't have fails
+/// with EADDRNOTAVAIL. That covers a tailnet IP, a MagicDNS name, and a LAN
+/// address without special-casing any of them — and refuses to auto-start a
+/// daemon for a `--host` that points somewhere else entirely.
+fn own_address(host: &str) -> Option<IpAddr> {
+    for addr in (host, 0u16).to_socket_addrs().ok()? {
+        // Port 0: the kernel picks an ephemeral one, so this never collides
+        // with the port the daemon is about to take.
+        if TcpListener::bind(SocketAddr::new(addr.ip(), 0)).is_ok() {
+            return Some(addr.ip());
+        }
+    }
+    None
+}
+
+/// Launch `sailor-hook serve --bind <ip>` detached, so it outlives this
+/// command and the terminal that ran it.
+fn spawn_gateway(bind: IpAddr, port: u16) -> anyhow::Result<()> {
+    let exe = std::env::current_exe()?;
+    let log_path = gateway_log_path()?;
+    if let Some(parent) = log_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let log = std::fs::File::create(&log_path)?;
+    let errors = log.try_clone()?;
+    Command::new(exe)
+        .args([
+            "serve",
+            "--bind",
+            &bind.to_string(),
+            "--port",
+            &port.to_string(),
+            // Pairing already happened out of band (the QR); announcing this
+            // host on the LAN is a separate decision the user hasn't made.
+            "--no-advertise",
+        ])
+        .stdin(std::process::Stdio::null())
+        .stdout(log)
+        .stderr(errors)
+        // Its own process group: closing the terminal that ran `easy-pair`
+        // sends SIGHUP to the group, which would take the daemon with it.
+        .process_group(0)
+        .spawn()?;
+    Ok(())
+}
+
+/// Poll /health until the freshly spawned daemon answers. Binding a port and
+/// starting to accept isn't instant, and the QR has to carry the token or
+/// not — there is no revising it once printed.
+async fn await_gateway(host: &str, port: u16) -> Option<String> {
+    for _ in 0..20 {
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+        if let Some(token) = reachable_gateway(host, port).await {
+            return Some(token);
+        }
+    }
+    None
+}
+
+fn gateway_log_path() -> anyhow::Result<std::path::PathBuf> {
+    let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("could not resolve $HOME"))?;
+    Ok(home.join(".sailor").join("gateway.log"))
+}
+
+/// The gateway's token, when a daemon actually answers at `host:port`.
+///
+/// `/health` is unauthenticated precisely so this probe can tell "there is a
+/// daemon here" from "there isn't" without holding a credential yet. The
+/// token itself comes from local storage — the same value `serve` validates.
+async fn reachable_gateway(host: &str, port: u16) -> Option<String> {
+    let responded = tokio::time::timeout(
+        std::time::Duration::from_millis(1500),
+        reqwest::get(format!("http://{host}:{port}/health")),
+    )
+    .await
+    .ok()?
+    .ok()?
+    .status()
+    .is_success();
+    if !responded {
+        return None;
+    }
+    crate::secret::ensure_gateway_token().ok()
 }
 
 /// Parse `MOSH CONNECT <port> <key>` out of mosh-server's stdout.

@@ -56,14 +56,16 @@ impl Context {
 pub fn detect() -> Context {
     let cwd = env::current_dir().ok().map(|p| p.display().to_string());
 
-    // Herdr: $HERDR_ENV is set inside a Herdr session.
+    // Herdr: $HERDR_ENV is set inside a Herdr session. $HERDR_PANE_ID is
+    // the pane's id (`w7:pJ`) — the same id `herdr agent list` reports, which
+    // is what lets the daemon match a row to its native agent state.
     if let Ok(herdr_env) = env::var("HERDR_ENV") {
         if !herdr_env.is_empty() {
             return Context {
                 kind: Kind::Herdr,
                 session: env::var("HERDR_SESSION").ok(),
-                pane: None,
-                workspace: env::var("HERDR_WORKSPACE").ok(),
+                pane: env::var("HERDR_PANE_ID").ok(),
+                workspace: env::var("HERDR_WORKSPACE_ID").ok(),
                 cwd,
             };
         }
