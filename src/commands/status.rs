@@ -10,11 +10,23 @@ pub fn run(json: bool) -> anyhow::Result<()> {
     let running = gateway_running(GATEWAY_PORT);
     let agents = install::installed_agents();
 
+    let state = crate::paths::state_dir()?;
+    let config = crate::paths::config_dir()?;
+    let socket = ipc_socket_path()?;
+    let paths = serde_json::json!({
+        "state": state,
+        "config": config,
+        "socket": socket,
+        "lock": state.join("serve.lock"),
+        "gateway_log": state.join("gateway.log"),
+    });
+
     let status = serde_json::json!({
         "version": env!("CARGO_PKG_VERSION"),
         "paired": paired,
         "gateway": { "host": "127.0.0.1", "port": GATEWAY_PORT, "running": running },
         "agents_installed": agents,
+        "paths": paths,
     });
 
     if json {
@@ -34,8 +46,17 @@ pub fn run(json: bool) -> anyhow::Result<()> {
                 agents.join(", ")
             }
         );
+        println!("  state:      {}", state.display());
+        println!("  config:     {}", config.display());
+        println!("  socket:     {}", socket.display());
     }
     Ok(())
+}
+
+/// Resolve the hook socket path without connecting to it. Shared by the
+/// status output and `serve` (which binds the same path).
+fn ipc_socket_path() -> anyhow::Result<std::path::PathBuf> {
+    crate::ipc::socket_path()
 }
 
 /// The gateway binds loopback only, so "can we connect to it" is the whole

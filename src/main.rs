@@ -21,11 +21,13 @@ mod herdr;
 mod hostid;
 mod inbox;
 mod ipc;
+mod paths;
 mod pending;
 mod preview;
 mod push;
 mod secret;
 mod server;
+mod servers;
 
 use clap::Parser;
 use cli::{Cli, Command};
@@ -43,6 +45,7 @@ async fn main() -> anyhow::Result<()> {
 
     match cli.command {
         Command::Pair { token, store } => commands::pair::run(token, store).await,
+        Command::Unpair => commands::unpair::run(),
         Command::EasyPair {
             host,
             colors,
@@ -69,6 +72,13 @@ async fn main() -> anyhow::Result<()> {
             ssh_port,
             no_advertise,
         } => commands::serve::run(port, bind, ssh_port, !no_advertise).await,
+        Command::Service { verb } => commands::service::run(verb),
+        Command::Servers { cmd } => match cmd {
+            None => commands::servers::run_list().await,
+            Some(cli::ServersCommand::Kill { pid, port, force }) => {
+                commands::servers::run_kill(pid, port, force).await
+            }
+        },
         Command::Advertise { ssh_port } => discovery::advertise(ssh_port).await,
         Command::Push {
             set,

@@ -63,15 +63,14 @@ pub enum ServerMessage {
 }
 
 /// `$SAILOR_HOOK_SOCKET` wins (tests, non-standard layouts), else
-/// `~/.sailor/hook.sock`.
+/// `<state>/hook.sock` where state is `~/.sailor` or `$SAILOR_STATE_DIR`.
 pub fn socket_path() -> anyhow::Result<PathBuf> {
     if let Ok(p) = std::env::var("SAILOR_HOOK_SOCKET") {
         if !p.is_empty() {
             return Ok(PathBuf::from(p));
         }
     }
-    let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("could not resolve $HOME"))?;
-    Ok(home.join(".sailor").join("hook.sock"))
+    Ok(crate::paths::state_dir()?.join("hook.sock"))
 }
 
 /// An open connection to the daemon, for clients that expect replies.

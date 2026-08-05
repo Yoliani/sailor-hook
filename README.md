@@ -27,13 +27,35 @@ cargo install --path .
 ```sh
 sailor-hook install          # wire sailor's hooks into your agent configs
 sailor-hook serve            # run the daemon (Unix socket + HTTP gateway)
-sailor-hook easy-pair        # print a QR the app scans — no SSH creds on the phone
+sailor-hook easy-pair        # pick a host address, print a QR the app scans — no SSH creds on the phone
 sailor-hook status           # daemon + hook status
+sailor-hook servers          # list local HTTP dev servers the app can open in its browser
 ```
 
 `sailor-hook install` only writes sailor-owned entries into your agent config
 files and `uninstall` removes exactly those, so your own settings are left
 alone. Run `sailor-hook --help` for the full command list.
+
+Other commands worth knowing:
+
+- `sailor-hook pair --token <t>` / `unpair` — store or remove the pairing token
+  (Keychain by default; `--store file` for headless sessions).
+- `sailor-hook service install` — Linux only: run the daemon persistently as a
+  systemd user unit (`uninstall` / `status` manage it). On macOS use
+  `brew services start sailor-hook` or a plain `serve` in a terminal.
+- `sailor-hook servers kill --pid <pid> --port <port> [--force]` — terminate a
+  discovered dev server after re-validating it still matches.
+- `serve` is single-instance: a second `serve` exits with a clear message
+  rather than colliding on the socket.
+
+### Environment
+
+| Variable | Effect |
+| --- | --- |
+| `SAILOR_STATE_DIR` | Redirect daemon state (socket, lock, gateway log). Default `~/.sailor`. |
+| `SAILOR_CONFIG_DIR` | Redirect the file-backed secret store (pairing token, gateway token). Default `~/.config/sailor`. Setting it also makes `load` skip the login keychain, so a scratch daemon starts unpaired — useful for e2e isolation. |
+| `SAILOR_HOOK_SOCKET` | Override the hook Unix socket path. |
+| `SAILOR_HOOK_GATEWAY_LISTEN` | Override the gateway listen address (`host:port`). Explicit `--port`/`--bind` flags win. |
 
 ## Development
 

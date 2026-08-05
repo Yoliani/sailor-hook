@@ -91,12 +91,12 @@ fn build_service(ssh_port: u16) -> anyhow::Result<ServiceInfo> {
     Ok(info)
 }
 
-struct TailscaleInfo {
+pub(crate) struct TailscaleInfo {
     /// MagicDNS FQDN without the trailing dot, e.g. `mac.tailxyz.ts.net`.
-    dns_name: String,
+    pub dns_name: String,
     /// First label of the MagicDNS name, e.g. `mac` — used as the Bonjour
     /// instance label (DNS-clean, unique on the tailnet).
-    host_name: String,
+    pub host_name: String,
 }
 
 /// Locate a usable `tailscale` CLI. Prefers `tailscale` on `PATH` (Linux
@@ -116,7 +116,7 @@ fn tailscale_cli() -> Option<std::path::PathBuf> {
 /// Query `tailscale status --json` for the MagicDNS name. Returns `None` if
 /// no Tailscale CLI is found or Tailscale isn't running — the caller falls
 /// back to the LAN IPv4.
-fn tailscale_info() -> Option<TailscaleInfo> {
+pub(crate) fn tailscale_info() -> Option<TailscaleInfo> {
     let cli = tailscale_cli()?;
     let out = std::process::Command::new(cli)
         .arg("status")
@@ -146,7 +146,7 @@ fn tailscale_info() -> Option<TailscaleInfo> {
 /// Best-effort primary IPv4 on a non-loopback interface, without sending any
 /// packets: `connect` on a UDP socket only fills the kernel's routing for the
 /// local endpoint.
-fn lan_ipv4() -> Option<String> {
+pub(crate) fn lan_ipv4() -> Option<String> {
     let sock = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
     sock.connect("8.8.8.8:80").ok()?;
     match sock.local_addr().ok()? {

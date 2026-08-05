@@ -18,8 +18,7 @@ pub enum Backend {
 }
 
 fn file_path() -> anyhow::Result<PathBuf> {
-    let config = dirs::config_dir().ok_or_else(|| anyhow::anyhow!("no config dir"))?;
-    Ok(config.join("sailor").join("pairing-token"))
+    Ok(crate::paths::config_dir()?.join("pairing-token"))
 }
 
 pub fn store_pairing_token(token: &str, backend: Backend) -> anyhow::Result<()> {
@@ -45,6 +44,12 @@ pub fn store_pairing_token(token: &str, backend: Backend) -> anyhow::Result<()> 
 }
 
 pub fn load_pairing_token() -> anyhow::Result<String> {
+    // With an overridden config dir, the file store is the whole store: the
+    // point of `SAILOR_CONFIG_DIR` is that a scratch daemon starts unpaired
+    // rather than silently inheriting the login keychain's identity.
+    if std::env::var("SAILOR_CONFIG_DIR").is_ok() {
+        return Ok(fs::read_to_string(file_path()?)?);
+    }
     // Try keychain first, fall back to file.
     if let Ok(entry) = keyring::Entry::new(SERVICE, ACCOUNT) {
         if let Ok(token) = entry.get_password() {
@@ -53,6 +58,26 @@ pub fn load_pairing_token() -> anyhow::Result<String> {
     }
     let path = file_path()?;
     Ok(fs::read_to_string(path)?)
+}
+
+/// Remove the pairing token from every backend it may live in. Returns
+/// whether anything was actually removed — a clean exit state for `unpair`.
+/// A missing credential on one backend is not an error: the token may live
+/// in the other.
+pub fn remove_pairing_token() -> anyhow::Result<bool> {
+    let mut removed = false;
+    if let Ok(entry) = keyring::Entry::new(SERVICE, ACCOUNT) {
+        if entry.delete_credential().is_ok() {
+            removed = true;
+        }
+    }
+    if let Ok(path) = file_path() {
+        if path.exists() {
+            fs::remove_file(path)?;
+            removed = true;
+        }
+    }
+    Ok(removed)
 }
 
 /// The gateway's bearer token, generating and persisting one on first use.
@@ -86,8 +111,7 @@ pub fn ensure_gateway_token() -> anyhow::Result<String> {
 }
 
 fn gateway_file_path() -> anyhow::Result<PathBuf> {
-    let config = dirs::config_dir().ok_or_else(|| anyhow::anyhow!("no config dir"))?;
-    Ok(config.join("sailor").join("gateway-token"))
+    Ok(crate::paths::config_dir()?.join("gateway-token"))
 }
 
 #[cfg(test)]

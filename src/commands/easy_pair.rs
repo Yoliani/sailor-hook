@@ -35,9 +35,14 @@ pub async fn run(
 
     let host = match host {
         Some(h) => h,
-        None => local_ip().ok_or_else(|| {
-            anyhow::anyhow!("could not determine this machine's IP — pass --host <ip-or-name>")
-        })?,
+        // Interactive terminals get the moshi-style picker over every
+        // address we can discover; pipes keep the silent LAN auto-pick.
+        None => match pick_host()? {
+            Some(h) => h,
+            None => crate::discovery::lan_ipv4().ok_or_else(|| {
+                anyhow::anyhow!("could not determine this machine's IP — pass --host <ip-or-name>")
+            })?,
+        },
     };
     let user = std::env::var("USER").ok();
     let name = hostname();
@@ -88,9 +93,21 @@ pub async fn run(
         .quiet_zone(true)
         .build();
 
+    // moshi-style header: say plainly what the phone will connect to and
+    // what scanning grants *before* the QR, since the code is the session's
+    // only authentication — whoever holds it (and the gateway token, when
+    // attached below) has a shell here.
+    let target = match &user {
+        Some(u) => format!("{u}@{host}"),
+        None => host.clone(),
+    };
+    println!("Connection target: {target} (mosh udp {port})");
+    println!("Scan this Easy Pair QR from the sailor app (+ → Easy Pair) to pair this host.");
+    println!("WARNING: anyone who scans this code gets shell access to this host.");
+    println!("Do not share your screen, screenshot it, or paste the link below.");
+    println!();
     println!("{art}");
-    println!("Scan with the sailor app (+ → Easy Pair), or paste:");
-    println!("  {uri}");
+    println!("Link: {uri}");
     println!();
     println!("mosh-server is waiting on udp {host}:{port}; the code is single-use.");
     match (&gateway, started_gateway) {
@@ -180,8 +197,7 @@ async fn await_gateway(host: &str, port: u16) -> Option<String> {
 }
 
 fn gateway_log_path() -> anyhow::Result<std::path::PathBuf> {
-    let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("could not resolve $HOME"))?;
-    Ok(home.join(".sailor").join("gateway.log"))
+    Ok(crate::paths::state_dir()?.join("gateway.log"))
 }
 
 /// The gateway's token, when a daemon actually answers at `host:port`.
@@ -218,12 +234,83 @@ fn parse_connect_line(stdout: &str) -> Option<(u16, String)> {
     None
 }
 
-/// The primary outbound IPv4 of this machine: the address of a UDP socket
-/// "connected" to a public IP (no packets are sent).
-fn local_ip() -> Option<String> {
-    let socket = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
-    socket.connect("8.8.8.8:80").ok()?;
-    Some(socket.local_addr().ok()?.ip().to_string())
+/// One row in the address picker: a value the phone can dial plus where it
+/// was found (shown as a right-hand tag, moshi-style).
+struct Candidate {
+    value: String,
+    tag: &'static str,
+}
+
+/// Assemble the picker's rows in preference order — Tailscale (roams
+/// networks), then Bonjour, then the LAN IPv4 — dropping duplicates when
+/// two sources name the same address.
+fn build_candidates(
+    tailscale: Option<String>,
+    bonjour: Option<String>,
+    lan: Option<String>,
+) -> Vec<Candidate> {
+    let mut out: Vec<Candidate> = Vec::new();
+    for (value, tag) in [(tailscale, "Tailscale"), (bonjour, "Bonjour"), (lan, "LAN")] {
+        if let Some(v) = value {
+            if !out.iter().any(|c| c.value == v) {
+                out.push(Candidate { value: v, tag });
+            }
+        }
+    }
+    out
+}
+
+/// The Bonjour/mDNS name phones resolve on the LAN: `<hostname>.local`.
+/// `hostname` may already return the `.local` form (common on macOS).
+fn bonjour_name() -> Option<String> {
+    let short = hostname()?;
+    let short = short.trim_end_matches(".local");
+    (!short.is_empty()).then(|| format!("{short}.local"))
+}
+
+/// Interactive `--host`: offer every address we can discover and let the
+/// user pick (or type one), the way `moshi-hook host setup` does. Returns
+/// `None` when there's no terminal to ask — scripts and pipes keep the
+/// silent LAN auto-pick.
+fn pick_host() -> anyhow::Result<Option<String>> {
+    use std::io::IsTerminal as _;
+    // dialoguer renders on stderr, so both ends of the conversation must
+    // be a terminal for the picker to work.
+    if !std::io::stdin().is_terminal() || !std::io::stderr().is_terminal() {
+        return Ok(None);
+    }
+
+    let tailscale = crate::discovery::tailscale_info().map(|t| t.dns_name);
+    let candidates = build_candidates(tailscale, bonjour_name(), crate::discovery::lan_ipv4());
+
+    const MANUAL: &str = "Enter another hostname or IP";
+    let mut items: Vec<String> = candidates
+        .iter()
+        .enumerate()
+        .map(|(i, c)| format!("{}. {:<40} {}", i + 1, c.value, c.tag))
+        .collect();
+    items.push(format!("{}. {MANUAL}", items.len() + 1));
+
+    let choice = dialoguer::FuzzySelect::new()
+        .with_prompt("Choose the address sailor should use to connect to this host")
+        .items(&items)
+        .default(0)
+        .interact()
+        .map_err(|e| anyhow::anyhow!("easy-pair cancelled ({e})"))?;
+
+    if choice == candidates.len() {
+        let typed = dialoguer::Input::<String>::new()
+            .with_prompt("Hostname or IP")
+            .interact_text()
+            .map_err(|e| anyhow::anyhow!("easy-pair cancelled ({e})"))?;
+        let typed = typed.trim();
+        if typed.is_empty() {
+            anyhow::bail!("no address entered");
+        }
+        Ok(Some(typed.to_string()))
+    } else {
+        Ok(Some(candidates[choice].value.clone()))
+    }
 }
 
 fn hostname() -> Option<String> {
@@ -260,6 +347,24 @@ mod tests {
         );
         assert_eq!(parse_connect_line("no connect here"), None);
         assert_eq!(parse_connect_line("MOSH CONNECT notaport key"), None);
+    }
+
+    #[test]
+    fn candidates_are_ordered_and_deduped() {
+        let all = build_candidates(
+            Some("mac.tailxyz.ts.net".into()),
+            Some("macbook.local".into()),
+            Some("192.168.1.50".into()),
+        );
+        let tags: Vec<_> = all.iter().map(|c| c.tag).collect();
+        assert_eq!(tags, ["Tailscale", "Bonjour", "LAN"]);
+
+        // Two sources naming the same address collapse to one row.
+        let dup = build_candidates(None, Some("10.0.0.2".into()), Some("10.0.0.2".into()));
+        assert_eq!(dup.len(), 1);
+        assert_eq!(dup[0].tag, "Bonjour");
+
+        assert!(build_candidates(None, None, None).is_empty());
     }
 
     #[test]

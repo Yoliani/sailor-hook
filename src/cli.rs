@@ -20,11 +20,16 @@ pub enum Command {
         #[arg(long, default_value = "keychain")]
         store: String,
     },
+    /// Remove the pairing token stored by `pair` — this host is unpaired
+    /// until `pair` runs again.
+    Unpair,
     /// Start mosh-server and print a QR code the sailor app scans to
     /// connect directly — no SSH credentials on the phone.
     EasyPair {
-        /// Host address to encode in the QR (default: this machine's
-        /// primary IPv4). Use a Tailscale MagicDNS name to roam networks.
+        /// Host address to encode in the QR. When omitted, an interactive
+        /// picker offers the discovered addresses (Tailscale, Bonjour, LAN);
+        /// non-interactive runs fall back to this machine's primary IPv4.
+        /// Use a Tailscale MagicDNS name to roam networks.
         #[arg(long)]
         host: Option<String>,
         /// Terminal color count mosh-server advertises (8 or 256).
@@ -89,20 +94,29 @@ pub enum Command {
     /// Run the daemon: Unix socket + HTTP gateway + WebSocket + push.
     Serve {
         /// Gateway port (default 24543, matching moshi-hook for familiarity).
-        #[arg(long, default_value = "24543")]
-        port: u16,
+        /// Set `SAILOR_HOOK_GATEWAY_LISTEN=host:port` to override both
+        /// address and port at once (flag wins over env).
+        #[arg(long)]
+        port: Option<u16>,
         /// Address the gateway binds. Loopback (the default) is reachable
         /// only through your own SSH session. Bind a tailnet address (or
         /// 0.0.0.0) to let an Easy Pair phone reach it directly — that
         /// requires the bearer token, which the QR then carries.
-        #[arg(long, default_value = "127.0.0.1")]
-        bind: std::net::IpAddr,
+        #[arg(long)]
+        bind: Option<std::net::IpAddr>,
         /// SSH port to advertise for LAN auto-discovery (mosh bootstraps over SSH).
         #[arg(long, default_value = "22")]
         ssh_port: u16,
         /// Skip advertising this host as `_sailor._tcp` on the LAN.
         #[arg(long)]
         no_advertise: bool,
+    },
+    /// Run the daemon persistently. Linux: installs a systemd user unit and
+    /// starts it; `uninstall` removes it; `status` shows the unit. On macOS
+    /// this points at `brew services` instead.
+    Service {
+        /// `install` | `uninstall` | `status`.
+        verb: String,
     },
     /// Advertise this host as a `_sailor._tcp` Bonjour service on the LAN
     /// so the sailor app can auto-discover it. The TXT record carries the
@@ -112,6 +126,13 @@ pub enum Command {
         /// SSH port the phone should connect to (mosh bootstraps over SSH).
         #[arg(long, default_value = "22")]
         ssh_port: u16,
+    },
+    /// List local HTTP dev servers the app can open in an in-app browser,
+    /// or kill one (`servers kill --pid N --port N`). Same-port forwarding:
+    /// the app loads each origin over an SSH forward, no proxy involved.
+    Servers {
+        #[command(subcommand)]
+        cmd: Option<ServersCommand>,
     },
     /// Configure or test self-hostable push (ntfy / Gotify / UnifiedPush).
     /// With no flags, prints the current setup.
@@ -162,4 +183,19 @@ pub enum Command {
     },
     /// Print version.
     Version,
+}
+
+#[derive(Debug, clap::Subcommand)]
+pub enum ServersCommand {
+    /// Terminate a discovered dev server after re-validating that the PID
+    /// and port still belong to one (arbitrary PIDs are rejected).
+    Kill {
+        #[arg(long)]
+        pid: u32,
+        #[arg(long)]
+        port: u16,
+        /// SIGKILL after a 2s grace if SIGTERM didn't take.
+        #[arg(long)]
+        force: bool,
+    },
 }

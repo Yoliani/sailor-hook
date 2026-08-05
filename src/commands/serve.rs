@@ -21,11 +21,13 @@ const PRUNE_INTERVAL: Duration = Duration::from_secs(600);
 const HERDR_POLL_INTERVAL: Duration = Duration::from_secs(5);
 
 pub async fn run(
-    port: u16,
-    bind: std::net::IpAddr,
+    port: Option<u16>,
+    bind: Option<std::net::IpAddr>,
     ssh_port: u16,
     advertise: bool,
 ) -> anyhow::Result<()> {
+    let (bind, port) = resolve_listen(bind, port)?;
+    let _instance = acquire_instance_lock()?;
     tracing::info!("sailor-hook serve starting (gateway {bind}:{port})");
 
     // Off-loopback means the gateway is on a network (a tailnet, typically),
@@ -143,5 +145,112 @@ fn refresh_herdr_states(inbox: &Inbox) {
         if !states.is_empty() {
             inbox.apply_agent_states(&session, &states);
         }
+    }
+}
+
+/// Resolve the gateway listen address with moshi's precedence, minus the
+/// config file tier: explicit `--bind`/`--port` flags win, then
+/// `SAILOR_HOOK_GATEWAY_LISTEN=host:port`, then loopback:24543.
+fn resolve_listen(
+    bind: Option<std::net::IpAddr>,
+    port: Option<u16>,
+) -> anyhow::Result<(std::net::IpAddr, u16)> {
+    if let Some(b) = bind {
+        return Ok((b, port.unwrap_or(24543)));
+    }
+    if let Ok(listen) = std::env::var("SAILOR_HOOK_GATEWAY_LISTEN") {
+        if !listen.is_empty() {
+            return parse_listen(&listen);
+        }
+    }
+    Ok((
+        std::net::IpAddr::from([127, 0, 0, 1]),
+        port.unwrap_or(24543),
+    ))
+}
+
+/// Parse `host:port` where host is an IP literal or a resolvable name.
+fn parse_listen(listen: &str) -> anyhow::Result<(std::net::IpAddr, u16)> {
+    use std::net::ToSocketAddrs;
+    let (host, port_s) = listen.rsplit_once(':').ok_or_else(|| {
+        anyhow::anyhow!("SAILOR_HOOK_GATEWAY_LISTEN must be host:port, got {listen:?}")
+    })?;
+    let port: u16 = port_s
+        .parse()
+        .map_err(|_| anyhow::anyhow!("invalid port in SAILOR_HOOK_GATEWAY_LISTEN: {port_s:?}"))?;
+    if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+        return Ok((ip, port));
+    }
+    let ip = (host, 0u16)
+        .to_socket_addrs()?
+        .next()
+        .map(|a| a.ip())
+        .ok_or_else(|| anyhow::anyhow!("could not resolve {host:?}"))?;
+    Ok((ip, port))
+}
+
+/// A held exclusive lock on `<state>/serve.lock`. The daemon is one per
+/// host; a second `serve` exits with a clear message instead of colliding
+/// on the socket. The lock is released when the daemon exits (advisory
+/// flock, dropped with the file).
+struct InstanceLock {
+    _file: std::fs::File,
+}
+
+fn acquire_instance_lock() -> anyhow::Result<InstanceLock> {
+    use fs2::FileExt;
+    let path = crate::paths::state_dir()?.join("serve.lock");
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let file = std::fs::File::create(&path)?;
+    match file.try_lock_exclusive() {
+        Ok(()) => Ok(InstanceLock { _file: file }),
+        Err(_) => anyhow::bail!(
+            "another sailor-hook serve is already running (lock {}). \
+             Check `sailor-hook status` or stop it first.",
+            path.display()
+        ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_ip_and_named_listen_targets() {
+        assert_eq!(
+            parse_listen("0.0.0.0:3000").unwrap(),
+            (std::net::IpAddr::from([0, 0, 0, 0]), 3000)
+        );
+        assert_eq!(
+            parse_listen("127.0.0.1:24543").unwrap(),
+            (std::net::IpAddr::from([127, 0, 0, 1]), 24543)
+        );
+        assert!(parse_listen("nonsense").is_err());
+        assert!(parse_listen("host:notaport").is_err());
+        // An unresolvable name errors rather than guessing.
+        assert!(parse_listen("definitely-not-a-host.invalid:80").is_err());
+    }
+
+    #[test]
+    fn instance_lock_is_exclusive_within_one_process() {
+        use fs2::FileExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("serve.lock");
+        let file = std::fs::File::create(&path).unwrap();
+        file.lock_exclusive().unwrap();
+        // A second, independently-opened descriptor cannot take the lock
+        // while the first holds it — the mechanism the single-instance
+        // guard relies on. (Deliberately no re-lock-after-close assertion:
+        // close/re-open flock release timing is platform-dependent and
+        // flaky under parallel test load; release is exercised e2e.)
+        let second = std::fs::File::create(&path).unwrap();
+        assert!(second.try_lock_exclusive().is_err());
+        drop(second);
+        // Unlock + re-lock the same descriptor is deterministic everywhere.
+        file.unlock().unwrap();
+        assert!(file.try_lock_exclusive().is_ok());
     }
 }
